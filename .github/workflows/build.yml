@@ -7,7 +7,7 @@ on:
 
 jobs:
   demo:
-    runs-on: self-hosted # Runs on your self-hosted runner
+    runs-on: [self-hosted, oregon] # Runs on your self-hosted runner
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -44,6 +44,24 @@ jobs:
           docker pull ghcr.io/techsoft3d/streaming-server:latest
           docker pull ghcr.io/techsoft3d/node-server:latest
           docker pull ghcr.io/techsoft3d/proxy-server:latest
+
+      - name: Copy `./public` into External Docker Volume (Using Temporary Container)
+        run: |
+          docker run --rm \
+            -v public:/volume \
+            -v $(pwd)/public:/backup \
+            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
+  
+          docker run --rm \
+            -v patches:/volume \
+            -v $(pwd)/patches:/backup \
+            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
+          docker run --rm \
+            -v models:/volume \
+            -v $(pwd)/models:/backup \
+            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
+
+    
       - name: Build and Run Docker Containers
         run: |
           docker-compose up -d --force-recreate
