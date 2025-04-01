@@ -68,7 +68,7 @@ jobs:
           docker-compose up -d --force-recreate
  
 
- run-in-paris:
+  run-in-paris:
     name: Run on Paris Runner
     runs-on: [self-hosted, paris] # Runs on your self-hosted runner
     steps:
