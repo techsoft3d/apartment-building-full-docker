@@ -10,10 +10,16 @@ jobs:
     name: Run on Orgeon Runner
     runs-on: [self-hosted, oregon] # Runs on your self-hosted runner
     steps:
+      - name: Fix permissions before checkout
+        run: sudo chown -R $USER:$USER $GITHUB_WORKSPACE
+
+      - name: Force delete previous build artifacts
+        run: sudo rm -rf $GITHUB_WORKSPACE/* || true
+
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          ref: staging  
+          ref: staging
           clean: true
 
       - name: Create hoops_license.txt
@@ -45,7 +51,7 @@ jobs:
 
       - name: Remove unused Docker images
         run: docker image prune -af
-      
+
       - name: Pull Latest Docker Images
         run: |
           docker pull ghcr.io/techsoft3d/streaming-server:staging
@@ -57,21 +63,25 @@ jobs:
             -v public-staging:/volume \
             -v $(pwd)/public-staging:/backup \
             alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-  
-       
+
       - name: Build and Run Docker Containers
         run: |
           docker-compose -p staging_project up -d --force-recreate
- 
 
   run-in-paris:
     name: Run on Paris Runner
     runs-on: [self-hosted, paris] # Runs on your self-hosted runner
     steps:
+      - name: Fix permissions before checkout
+        run: sudo chown -R $USER:$USER $GITHUB_WORKSPACE
+
+      - name: Force delete previous build artifacts
+        run: sudo rm -rf $GITHUB_WORKSPACE/* || true
+
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          ref: staging  
+          ref: staging
           clean: true
 
       - name: Create hoops_license.txt
@@ -112,9 +122,7 @@ jobs:
             -v public-staging:/volume \
             -v $(pwd)/public-staging:/backup \
             alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-  
-       
+
       - name: Build and Run Docker Containers
         run: |
           docker-compose -p staging_project up -d --force-recreate
-          
