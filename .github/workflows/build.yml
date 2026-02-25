@@ -30,6 +30,35 @@ jobs:
           echo "${{ secrets.SSL_KEY }}" > certs/server.key
           echo "${{ secrets.CA_CERT }}" > certs/ca.crt
 
+      - name: Show proxy container and inspect TLS cert (runtime)
+        run: |
+          set -e
+          echo "=== containers ==="
+          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+          echo "=== find container exposing 443 ==="
+          PROXY=$(docker ps --format '{{.Names}} {{.Ports}}' | awk '/:443->/ {print $1; exit}')
+          echo "PROXY=$PROXY"
+          echo "=== try common paths ==="
+          docker exec "$PROXY" sh -lc 'ls -la /etc/nginx || true; ls -la /etc/nginx/ssl || true; ls -la /certs || true; ls -la /ssl || true'
+          echo "=== grep nginx conf for cert paths ==="
+          docker exec "$PROXY" sh -lc 'grep -R --line-number -E "ssl_certificate|ssl_certificate_key" /etc/nginx 2>/dev/null || true'
+          echo "=== print served cert file if found ==="
+          docker exec "$PROXY" sh -lc '
+            for f in \
+              /etc/nginx/ssl/server.crt \
+              /etc/nginx/ssl/fullchain.pem \
+              /etc/nginx/ssl/cert.pem \
+              /certs/server.crt \
+              /ssl/server.crt \
+              /etc/ssl/certs/server.crt
+            do
+              if [ -f "$f" ]; then
+                echo "--- $f ---"
+                openssl x509 -in "$f" -noout -dates -serial -subject -issuer || true
+              fi
+            done
+          '
+
       - name: Verify SSL Certificates
         run: |
           echo "🔍 Checking SSL certificate files..."
