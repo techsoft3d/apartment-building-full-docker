@@ -191,6 +191,17 @@ jobs:
           docker inspect proxy-server --format 'running_image={{.Image}}' || true
           docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format 'local={{index .RepoDigests 0}}'
 
+      - name: Who is listening on 443 (host level)
+        run: |
+          echo "=== ss ==="
+          sudo ss -lntp | grep ':443' || true
+
+          echo "=== lsof ==="
+          sudo lsof -nP -iTCP:443 -sTCP:LISTEN || true
+
+          echo "=== docker ps 443 ==="
+          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}" | grep 443 || true
+    
       - name: Runtime TLS check on localhost (extract leaf + compare to expected)
         run: |
           set -euo pipefail
