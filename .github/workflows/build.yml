@@ -38,6 +38,9 @@ jobs:
             exit 1
           fi
           ls -la certs/
+                - name: Show deployed SSL cert identity (safe)
+        run: |
+          openssl x509 -in certs/server.crt -noout -serial -dates -issuer -subject
 
       - name: Login to GitHub Packages
         run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
