@@ -142,6 +142,15 @@ jobs:
           docker-compose pull proxy-server || true
           docker-compose up -d --force-recreate
 
+       - name: Hard restart proxy (Paris)
+        run: |
+          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
+          docker rm -f proxy-server || true
+          docker rmi ghcr.io/techsoft3d/proxy-server:latest || true
+          docker pull ghcr.io/techsoft3d/proxy-server:latest
+          docker-compose up -d --force-recreate
+          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
+
       - name: Show running containers and proxy image digest
         run: |
           docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
