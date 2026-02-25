@@ -38,7 +38,8 @@ jobs:
             exit 1
           fi
           ls -la certs/
-                - name: Show deployed SSL cert identity (safe)
+
+      - name: Show deployed SSL cert identity (safe)
         run: |
           openssl x509 -in certs/server.crt -noout -serial -dates -issuer -subject
 
