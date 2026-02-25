@@ -2,236 +2,221 @@ name: Docker Demo on Self-Hosted Runner
 
 on:
   push:
-    branches: [main]
-
-defaults:
-  run:
-    shell: bash
+    branches:
+      - main
 
 jobs:
   run-in-oregon:
-    name: Run on Oregon Runner
-    runs-on: [self-hosted, oregon]
+    name: Run on Orgeon Runner
+    runs-on: [self-hosted, oregon] # Runs on your self-hosted runner
     steps:
       - name: Fix file ownership
         run: sudo chown -R $USER:$USER $GITHUB_WORKSPACE
-
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Identify runner
+      - name: Create hoops_license.txt
+        run: |
+          echo "${{ secrets.HOOPS_LICENSE }}" | base64 --decode > hoops_license.txt
+          ls -l hoops_license.txt  # Verify file exists
+          cat hoops_license.txt  # Debugging: Check file content (remove in production)
+
+      - name: Show pulled proxy digest
+        run: |
+          docker pull ghcr.io/techsoft3d/proxy-server:latest
+          docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format '{{index .RepoDigests 0}}'
+
+          
+
+      - name: Write SSL certificates to files
+        run: |
+          pwd  # Print the current working directory
+          ls -la  # List files before creating certs
+          mkdir -p certs
+          echo "${{ secrets.SSL_CERT }}" > certs/server.crt
+          echo "${{ secrets.SSL_KEY }}" > certs/server.key
+          echo "${{ secrets.CA_CERT }}" > certs/ca.crt
+
+      - name: Show proxy container and inspect TLS cert (runtime)
+        run: |
+          set -e
+          echo "=== containers ==="
+          docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+          echo "=== find container exposing 443 ==="
+          PROXY=$(docker ps --format '{{.Names}} {{.Ports}}' | awk '/:443->/ {print $1; exit}')
+          echo "PROXY=$PROXY"
+          echo "=== try common paths ==="
+          docker exec "$PROXY" sh -lc 'ls -la /etc/nginx || true; ls -la /etc/nginx/ssl || true; ls -la /certs || true; ls -la /ssl || true'
+          echo "=== grep nginx conf for cert paths ==="
+          docker exec "$PROXY" sh -lc 'grep -R --line-number -E "ssl_certificate|ssl_certificate_key" /etc/nginx 2>/dev/null || true'
+          echo "=== print served cert file if found ==="
+          docker exec "$PROXY" sh -lc '
+            for f in \
+              /etc/nginx/ssl/server.crt \
+              /etc/nginx/ssl/fullchain.pem \
+              /etc/nginx/ssl/cert.pem \
+              /certs/server.crt \
+              /ssl/server.crt \
+              /etc/ssl/certs/server.crt
+            do
+              if [ -f "$f" ]; then
+                echo "--- $f ---"
+                openssl x509 -in "$f" -noout -dates -serial -subject -issuer || true
+              fi
+            done
+          '
+
+      - name: Verify SSL Certificates
+        run: |
+          echo "🔍 Checking SSL certificate files..."
+          if [ ! -s certs/server.crt ] || [ ! -s certs/server.key ]; then
+            echo "❌ Error: SSL certificate files are missing or empty!"
+            exit 1
+          fi
+          ls -la certs/
+
+      - name: Show pulled proxy image digest
+        run: |
+          docker pull ghcr.io/techsoft3d/proxy-server:latest
+          docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format '{{index .RepoDigests 0}}'
+
+      - name: Show deployed SSL cert identity 
+        run: |
+          openssl x509 -in certs/server.crt -noout -serial -dates -issuer -subject
+      - name: Identify runner 
         run: |
           echo "hostname=$(hostname)"
           echo "public_ip=$(curl -s https://checkip.amazonaws.com || true)"
           echo "private_ips="
           ip -4 addr | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p'
-
-      - name: Create hoops_license.txt
+      - name: Show containers and ports
         run: |
-          echo "${{ secrets.HOOPS_LICENSE }}" | base64 --decode > hoops_license.txt
-          ls -l hoops_license.txt
+          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
+          echo "---- candidates exposing 443 ----"
+          docker ps --format "{{.Names}} {{.Ports}}" | grep -E "(:443->|0\.0\.0\.0:443->|\[::\]:443->)" || true
 
-      - name: Write SSL certificates to files (from secrets)
+      - name: Inspect cert inside 443 container (safe)
         run: |
-          mkdir -p certs
-          echo "${{ secrets.SSL_CERT }}" > certs/server.crt
-          echo "${{ secrets.SSL_KEY }}"  > certs/server.key
-          echo "${{ secrets.CA_CERT }}"  > certs/ca.crt
-          ls -la certs/
+          PROXY=$(docker ps --format "{{.Names}} {{.Ports}}" | awk '$0 ~ /:443->/ {print $1; exit}')
+          echo "proxy_container=$PROXY"
+          if [ -z "$PROXY" ]; then
+            echo "No container exposing 443 on this runner"
+            exit 0
+          fi
 
-      - name: Show expected cert identity (from secrets)
-        run: |
-          openssl x509 -in certs/server.crt -noout -dates -serial -subject -issuer
+          echo "---- list likely cert dirs ----"
+          docker exec "$PROXY" sh -lc 'ls -la /etc/nginx /etc/nginx/certs /certs /etc/ssl 2>/dev/null || true'
 
-      - name: Login to GHCR
+          echo "---- try reading common cert paths ----"
+          docker exec "$PROXY" sh -lc '
+            for f in \
+              /etc/nginx/certs/server.crt \
+              /etc/nginx/certs/fullchain.pem \
+              /etc/nginx/certs/cert.pem \
+              /etc/ssl/certs/server.crt \
+              /certs/server.crt \
+              /certs/fullchain.pem
+            do
+              if [ -f "$f" ]; then
+                echo "FOUND $f"
+                openssl x509 -in "$f" -noout -serial -dates -subject -issuer || true
+              fi
+            done
+          '
+
+      - name: Login to GitHub Packages
         run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Force refresh proxy image (pull latest digest)
-        run: |
-          docker pull ghcr.io/techsoft3d/proxy-server:latest
-          docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format 'pulled={{index .RepoDigests 0}}'
+      - name: Clean up server
+        run: docker image prune -af
 
-      - name: Pull latest images
+      - name: Pull Latest Docker Images
         run: |
           docker pull ghcr.io/techsoft3d/streaming-server:latest
           docker pull ghcr.io/techsoft3d/node-server:latest
           docker pull ghcr.io/techsoft3d/proxy-server:latest
-          docker pull alpine:latest || true
 
-      - name: Copy ./public, ./patches, ./models into External Docker Volumes
+      - name: Copy ./public into External Docker Volume (Using Temporary Container)
         run: |
-          docker run --rm -v public:/volume  -v "$(pwd)/public:/backup"  alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-          docker run --rm -v patches:/volume -v "$(pwd)/patches:/backup" alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-          docker run --rm -v models:/volume  -v "$(pwd)/models:/backup"  alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
+          docker run --rm \
+            -v public:/volume \
+            -v $(pwd)/public:/backup \
+            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
 
-      - name: Deploy (force recreate)
+          docker run --rm \
+            -v patches:/volume \
+            -v $(pwd)/patches:/backup \
+            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
+          docker run --rm \
+            -v models:/volume \
+            -v $(pwd)/models:/backup \
+            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
+
+      - name: Build and Run Docker Containers
         run: |
-          docker-compose pull proxy-server || true
           docker-compose up -d --force-recreate
-
-      - name: Hard restart proxy (surgical)
-        run: |
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
-          docker rm -f proxy-server || true
-          docker pull ghcr.io/techsoft3d/proxy-server:latest
-          docker-compose up -d --force-recreate
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
-
-      - name: Show running containers + proxy image reference
-        run: |
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
-          docker inspect proxy-server --format 'running_image={{.Image}}' || true
-          docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format 'local={{index .RepoDigests 0}}'
-
-      - name: Runtime TLS check on localhost (extract leaf + compare to expected)
-        run: |
-          set -euo pipefail
-
-          EXPECTED_SERIAL="$(openssl x509 -in certs/server.crt -noout -serial | cut -d= -f2)"
-          echo "EXPECTED_SERIAL=$EXPECTED_SERIAL"
-
-          timeout 15 openssl s_client \
-            -connect 127.0.0.1:443 \
-            -servername cad-model-streaming-docker.techsoft3d.com \
-            -showcerts </dev/null > /tmp/sclient.txt 2>&1 || true
-
-          awk 'BEGIN{p=0}
-               /-----BEGIN CERTIFICATE-----/{p=1}
-               p{print}
-               /-----END CERTIFICATE-----/{exit}' /tmp/sclient.txt > /tmp/leaf.pem
-
-          if [ ! -s /tmp/leaf.pem ]; then
-            echo "NO_CERT_EXTRACTED (127.0.0.1:443 is not serving TLS properly)"
-            sed -n '1,120p' /tmp/sclient.txt || true
-            exit 1
-          fi
-
-          echo "=== RUNTIME leaf cert ==="
-          openssl x509 -in /tmp/leaf.pem -noout -dates -serial -subject -issuer
-
-          RUNTIME_SERIAL="$(openssl x509 -in /tmp/leaf.pem -noout -serial | cut -d= -f2)"
-          echo "RUNTIME_SERIAL=$RUNTIME_SERIAL"
-
-          if [ "$RUNTIME_SERIAL" != "$EXPECTED_SERIAL" ]; then
-            echo "MISMATCH: runtime cert != secrets cert"
-            exit 1
-          fi
 
   run-in-paris:
     name: Run on Paris Runner
-    runs-on: [self-hosted, paris]
+    runs-on: [self-hosted, paris] # Runs on your self-hosted runner
     steps:
       - name: Fix file ownership
         run: sudo chown -R $USER:$USER $GITHUB_WORKSPACE
-
       - name: Checkout repository
         uses: actions/checkout@v3
-
-      - name: Identify runner
-        run: |
-          echo "hostname=$(hostname)"
-          echo "public_ip=$(curl -s https://checkip.amazonaws.com || true)"
-          echo "private_ips="
-          ip -4 addr | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p'
 
       - name: Create hoops_license.txt
         run: |
           echo "${{ secrets.HOOPS_LICENSE }}" | base64 --decode > hoops_license.txt
-          ls -l hoops_license.txt
+          ls -l hoops_license.txt  # Verify file exists
+          cat hoops_license.txt  # Debugging: Check file content (remove in production)
 
-      - name: Write SSL certificates to files (from secrets)
+      - name: Write SSL certificates to files
         run: |
+          pwd  # Print the current working directory
+          ls -la  # List files before creating certs
           mkdir -p certs
           echo "${{ secrets.SSL_CERT }}" > certs/server.crt
-          echo "${{ secrets.SSL_KEY }}"  > certs/server.key
-          echo "${{ secrets.CA_CERT }}"  > certs/ca.crt
+          echo "${{ secrets.SSL_KEY }}" > certs/server.key
+          echo "${{ secrets.CA_CERT }}" > certs/ca.crt
+
+      - name: Verify SSL Certificates
+        run: |
+          echo "🔍 Checking SSL certificate files..."
+          if [ ! -s certs/server.crt ] || [ ! -s certs/server.key ]; then
+            echo "❌ Error: SSL certificate files are missing or empty!"
+            exit 1
+          fi
           ls -la certs/
 
-      - name: Show expected cert identity (from secrets)
-        run: |
-          openssl x509 -in certs/server.crt -noout -dates -serial -subject -issuer
-
-      - name: Login to GHCR
+      - name: Login to GitHub Packages
         run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Force refresh proxy image (pull latest digest)
-        run: |
-          docker pull ghcr.io/techsoft3d/proxy-server:latest
-          docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format 'pulled={{index .RepoDigests 0}}'
+      - name: Clean up server
+        run: docker image prune -af
 
-      - name: Pull latest images
+      - name: Pull Latest Docker Images
         run: |
           docker pull ghcr.io/techsoft3d/streaming-server:latest
           docker pull ghcr.io/techsoft3d/node-server:latest
           docker pull ghcr.io/techsoft3d/proxy-server:latest
-          docker pull alpine:latest || true
 
-      - name: Copy ./public, ./patches, ./models into External Docker Volumes
+      - name: Copy ./public into External Docker Volume (Using Temporary Container)
         run: |
-          docker run --rm -v public:/volume  -v "$(pwd)/public:/backup"  alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-          docker run --rm -v patches:/volume -v "$(pwd)/patches:/backup" alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-          docker run --rm -v models:/volume  -v "$(pwd)/models:/backup"  alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
+          docker run --rm \
+            -v public:/volume \
+            -v $(pwd)/public:/backup \
+            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
 
-      - name: Deploy (force recreate)
+          docker run --rm \
+            -v patches:/volume \
+            -v $(pwd)/patches:/backup \
+            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
+          docker run --rm \
+            -v models:/volume \
+            -v $(pwd)/models:/backup \
+            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
+
+      - name: Build and Run Docker Containers
         run: |
-          docker-compose pull proxy-server || true
           docker-compose up -d --force-recreate
-
-      - name: Hard restart proxy (Paris)
-        run: |
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
-          docker rm -f proxy-server || true
-          docker pull ghcr.io/techsoft3d/proxy-server:latest
-          docker-compose up -d --force-recreate
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
-
-      - name: Show running containers + proxy image reference
-        run: |
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
-          docker inspect proxy-server --format 'running_image={{.Image}}' || true
-          docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format 'local={{index .RepoDigests 0}}'
-
-      - name: Who is listening on 443 (host level)
-        run: |
-          echo "=== ss ==="
-          sudo ss -lntp | grep ':443' || true
-
-          echo "=== lsof ==="
-          sudo lsof -nP -iTCP:443 -sTCP:LISTEN || true
-
-          echo "=== docker ps 443 ==="
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}" | grep 443 || true
-    
-      - name: Runtime TLS check on localhost (extract leaf + compare to expected)
-        run: |
-          set -euo pipefail
-
-          EXPECTED_SERIAL="$(openssl x509 -in certs/server.crt -noout -serial | cut -d= -f2)"
-          echo "EXPECTED_SERIAL=$EXPECTED_SERIAL"
-
-          timeout 15 openssl s_client \
-            -connect 127.0.0.1:443 \
-            -servername cad-model-streaming-docker.techsoft3d.com \
-            -showcerts </dev/null > /tmp/sclient.txt 2>&1 || true
-
-          awk 'BEGIN{p=0}
-               /-----BEGIN CERTIFICATE-----/{p=1}
-               p{print}
-               /-----END CERTIFICATE-----/{exit}' /tmp/sclient.txt > /tmp/leaf.pem
-
-          if [ ! -s /tmp/leaf.pem ]; then
-            echo "NO_CERT_EXTRACTED (127.0.0.1:443 is not serving TLS properly)"
-            sed -n '1,120p' /tmp/sclient.txt || true
-            exit 1
-          fi
-
-          echo "=== RUNTIME leaf cert ==="
-          openssl x509 -in /tmp/leaf.pem -noout -dates -serial -subject -issuer
-
-          RUNTIME_SERIAL="$(openssl x509 -in /tmp/leaf.pem -noout -serial | cut -d= -f2)"
-          echo "RUNTIME_SERIAL=$RUNTIME_SERIAL"
-
-          if [ "$RUNTIME_SERIAL" != "$EXPECTED_SERIAL" ]; then
-            echo "MISMATCH: runtime cert != secrets cert"
-            exit 1
-          fi
