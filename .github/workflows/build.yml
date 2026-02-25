@@ -39,6 +39,11 @@ jobs:
           fi
           ls -la certs/
 
+      - name: Show pulled proxy image digest
+        run: |
+          docker pull ghcr.io/techsoft3d/proxy-server:latest
+          docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format '{{index .RepoDigests 0}}'
+
       - name: Show deployed SSL cert identity 
         run: |
           openssl x509 -in certs/server.crt -noout -serial -dates -issuer -subject
