@@ -220,28 +220,3 @@ jobs:
       - name: Build and Run Docker Containers
         run: |
           docker-compose up -d --force-recreate
-      - name: Proxy health (host + container)
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          echo "=== HOST ==="
-          hostname || true
-          date || true
-          curl -s https://checkip.amazonaws.com || true
-          ss -lntp | grep -E '(:443|:80)' || true
-          ip -4 addr | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p'
-
-          echo "=== DOCKER PS ==="
-          docker ps -a --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
-
-          echo "=== PROXY LOGS ==="
-          docker logs --tail=200 proxy-server || true
-
-          echo "=== COMPOSE SERVICES ==="
-          docker compose ps || true
-          docker compose logs --tail=200 proxy-server || true
-
-          echo "=== LOCAL HTTPS TEST ==="
-          curl -vk --max-time 10 https://127.0.0.1/ || true
-          curl -vk --max-time 10 https://127.0.0.1/api/spawn || true
