@@ -39,15 +39,49 @@ jobs:
           fi
           ls -la certs/
 
-      - name: Show deployed SSL cert identity (safe)
+      - name: Show deployed SSL cert identity 
         run: |
           openssl x509 -in certs/server.crt -noout -serial -dates -issuer -subject
-      - name: Identify runner (safe)
+      - name: Identify runner 
         run: |
           echo "hostname=$(hostname)"
           echo "public_ip=$(curl -s https://checkip.amazonaws.com || true)"
           echo "private_ips="
           ip -4 addr | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p'
+      - name: Show containers and ports
+        run: |
+          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
+          echo "---- candidates exposing 443 ----"
+          docker ps --format "{{.Names}} {{.Ports}}" | grep -E "(:443->|0\.0\.0\.0:443->|\[::\]:443->)" || true
+
+      - name: Inspect cert inside 443 container (safe)
+        run: |
+          PROXY=$(docker ps --format "{{.Names}} {{.Ports}}" | awk '$0 ~ /:443->/ {print $1; exit}')
+          echo "proxy_container=$PROXY"
+          if [ -z "$PROXY" ]; then
+            echo "No container exposing 443 on this runner"
+            exit 0
+          fi
+
+          echo "---- list likely cert dirs ----"
+          docker exec "$PROXY" sh -lc 'ls -la /etc/nginx /etc/nginx/certs /certs /etc/ssl 2>/dev/null || true'
+
+          echo "---- try reading common cert paths ----"
+          docker exec "$PROXY" sh -lc '
+            for f in \
+              /etc/nginx/certs/server.crt \
+              /etc/nginx/certs/fullchain.pem \
+              /etc/nginx/certs/cert.pem \
+              /etc/ssl/certs/server.crt \
+              /certs/server.crt \
+              /certs/fullchain.pem
+            do
+              if [ -f "$f" ]; then
+                echo "FOUND $f"
+                openssl x509 -in "$f" -noout -serial -dates -subject -issuer || true
+              fi
+            done
+          '
 
       - name: Login to GitHub Packages
         run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
