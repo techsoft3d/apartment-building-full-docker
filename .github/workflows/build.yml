@@ -26,6 +26,15 @@ jobs:
           docker pull ghcr.io/techsoft3d/proxy-server:latest
           docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format '{{index .RepoDigests 0}}'
 
+      - name: Write SSL certificates to files
+        run: |
+          pwd  # Print the current working directory
+          ls -la  # List files before creating certs
+          mkdir -p certs
+          echo "${{ secrets.SSL_CERT }}" > certs/server.crt
+          echo "${{ secrets.SSL_KEY }}" > certs/server.key
+          echo "${{ secrets.CA_CERT }}" > certs/ca.crt
+
       - name: Verify SSL Certificates
         run: |
           echo "🔍 Checking SSL certificate files..."
