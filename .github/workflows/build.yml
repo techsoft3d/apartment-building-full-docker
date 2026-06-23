@@ -3,28 +3,30 @@ name: Docker Demo on Self-Hosted Runner
 on:
   push:
     branches:
-      - main
+      - staging
 
 jobs:
   run-in-oregon:
-    name: Run on Orgeon Runner
+    name: Run on Oregon Runner
     runs-on: [self-hosted, oregon] # Runs on your self-hosted runner
     steps:
-      - name: Fix file ownership
+      - name: Fix permissions before checkout
         run: sudo chown -R $USER:$USER $GITHUB_WORKSPACE
+
+      - name: Force delete previous build artifacts
+        run: sudo rm -rf $GITHUB_WORKSPACE/* || true
+
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          ref: staging
+          clean: true
 
       - name: Create hoops_license.txt
         run: |
           echo "${{ secrets.HOOPS_LICENSE }}" | base64 --decode > hoops_license.txt
           ls -l hoops_license.txt  # Verify file exists
           cat hoops_license.txt  # Debugging: Check file content (remove in production)
-
-      - name: Show pulled proxy digest
-        run: |
-          docker pull ghcr.io/techsoft3d/proxy-server:latest
-          docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format '{{index .RepoDigests 0}}'
 
       - name: Write SSL certificates to files
         run: |
@@ -44,95 +46,45 @@ jobs:
           fi
           ls -la certs/
 
-      - name: Show pulled proxy image digest
-        run: |
-          docker pull ghcr.io/techsoft3d/proxy-server:latest
-          docker image inspect ghcr.io/techsoft3d/proxy-server:latest --format '{{index .RepoDigests 0}}'
-
-      - name: Show deployed SSL cert identity 
-        run: |
-          openssl x509 -in certs/server.crt -noout -serial -dates -issuer -subject
-      - name: Identify runner 
-        run: |
-          echo "hostname=$(hostname)"
-          echo "public_ip=$(curl -s https://checkip.amazonaws.com || true)"
-          echo "private_ips="
-          ip -4 addr | sed -n 's/.*inet \([0-9.]*\)\/.*/\1/p'
-      - name: Show containers and ports
-        run: |
-          docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
-          echo "---- candidates exposing 443 ----"
-          docker ps --format "{{.Names}} {{.Ports}}" | grep -E "(:443->|0\.0\.0\.0:443->|\[::\]:443->)" || true
-
-      - name: Inspect cert inside 443 container (safe)
-        run: |
-          PROXY=$(docker ps --format "{{.Names}} {{.Ports}}" | awk '$0 ~ /:443->/ {print $1; exit}')
-          echo "proxy_container=$PROXY"
-          if [ -z "$PROXY" ]; then
-            echo "No container exposing 443 on this runner"
-            exit 0
-          fi
-
-          echo "---- list likely cert dirs ----"
-          docker exec "$PROXY" sh -lc 'ls -la /etc/nginx /etc/nginx/certs /certs /etc/ssl 2>/dev/null || true'
-
-          echo "---- try reading common cert paths ----"
-          docker exec "$PROXY" sh -lc '
-            for f in \
-              /etc/nginx/certs/server.crt \
-              /etc/nginx/certs/fullchain.pem \
-              /etc/nginx/certs/cert.pem \
-              /etc/ssl/certs/server.crt \
-              /certs/server.crt \
-              /certs/fullchain.pem
-            do
-              if [ -f "$f" ]; then
-                echo "FOUND $f"
-                openssl x509 -in "$f" -noout -serial -dates -subject -issuer || true
-              fi
-            done
-          '
-
       - name: Login to GitHub Packages
         run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Clean up server
-        run: docker image prune -af
+      - name: Remove unused Docker images
+        run: |
+          docker-compose -p staging_project down || true
+          docker system prune -af
 
       - name: Pull Latest Docker Images
         run: |
-          docker pull ghcr.io/techsoft3d/streaming-server:latest
-          docker pull ghcr.io/techsoft3d/node-server:latest
-          docker pull ghcr.io/techsoft3d/proxy-server:latest
+          docker pull ghcr.io/techsoft3d/streaming-server:staging
+          docker pull ghcr.io/techsoft3d/node-server:staging
 
-      - name: Copy ./public into External Docker Volume (Using Temporary Container)
+      - name: Copy `./public-staging` into External Docker Volume (Using Temporary Container)
         run: |
           docker run --rm \
-            -v public:/volume \
-            -v $(pwd)/public:/backup \
-            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-
-          docker run --rm \
-            -v patches:/volume \
-            -v $(pwd)/patches:/backup \
-            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-          docker run --rm \
-            -v models:/volume \
-            -v $(pwd)/models:/backup \
+            -v public-staging:/volume \
+            -v $(pwd)/public-staging:/backup \
             alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
 
       - name: Build and Run Docker Containers
         run: |
-          docker-compose up -d --force-recreate
+          docker-compose -p staging_project up -d --force-recreate
 
   run-in-paris:
     name: Run on Paris Runner
     runs-on: [self-hosted, paris] # Runs on your self-hosted runner
     steps:
-      - name: Fix file ownership
+      - name: Fix permissions before checkout
         run: sudo chown -R $USER:$USER $GITHUB_WORKSPACE
+
+      - name: Force delete previous build artifacts
+        run: sudo rm -rf $GITHUB_WORKSPACE/* || true
+
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          ref: staging
+          clean: true
 
       - name: Create hoops_license.txt
         run: |
@@ -161,31 +113,23 @@ jobs:
       - name: Login to GitHub Packages
         run: echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Clean up server
-        run: docker image prune -af
+      - name: Remove unused Docker images
+        run: |
+          docker-compose -p staging_project down || true
+          docker system prune -af
 
       - name: Pull Latest Docker Images
         run: |
-          docker pull ghcr.io/techsoft3d/streaming-server:latest
-          docker pull ghcr.io/techsoft3d/node-server:latest
-          docker pull ghcr.io/techsoft3d/proxy-server:latest
+          docker pull ghcr.io/techsoft3d/streaming-server:staging
+          docker pull ghcr.io/techsoft3d/node-server:staging
 
-      - name: Copy ./public into External Docker Volume (Using Temporary Container)
+      - name: Copy `./public-staging` into External Docker Volume (Using Temporary Container)
         run: |
           docker run --rm \
-            -v public:/volume \
-            -v $(pwd)/public:/backup \
-            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-
-          docker run --rm \
-            -v patches:/volume \
-            -v $(pwd)/patches:/backup \
-            alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
-          docker run --rm \
-            -v models:/volume \
-            -v $(pwd)/models:/backup \
+            -v public-staging:/volume \
+            -v $(pwd)/public-staging:/backup \
             alpine sh -c "cp -r /backup/* /volume/ && ls -la /volume/"
 
       - name: Build and Run Docker Containers
         run: |
-          docker-compose up -d --force-recreate
+          docker-compose -p staging_project up -d --force-recreate
